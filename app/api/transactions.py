@@ -1,13 +1,19 @@
 import uuid
 from datetime import datetime, timezone, time
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Literal
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status, Response
 from sqlalchemy.orm import Session, joinedload, object_session
 from sqlalchemy import or_
 
-from app.database import get_db
+from app.database import get_db, get_current_profile
+from app.core.profiles import ProfileMetadata
+from app.core.receipts import (
+    build_receipt_file_response,
+    build_transaction_receipt_url,
+    normalize_transfer_provenance_urls,
+)
 from app.models import Transaction, TransactionType, ExpenseNature, Account, Category, CategoryType
 from app.core.categories import (
     CategoryValidationError,
@@ -34,6 +40,7 @@ from app.core.currency import (
     pounds_to_pence, pence_to_pounds, format_pence,
     validate_origin_amount, format_origin_amount,
     get_currency_spec, get_effective_base_currency,
+    get_base_currency_readonly, DEFAULT_BASE_CURRENCY,
     SUPPORTED_CURRENCIES
 )
 from app.core.timezone import (
@@ -62,7 +69,13 @@ def _to_transaction_response(tx: Transaction) -> TransactionResponse:
     implied_label = None
     is_implied = False
 
-    acc_curr = tx.account.currency if tx.account else "GBP"
+    sess = object_session(tx)
+    if tx.account:
+        acc_curr = tx.account.currency
+    elif sess is not None:
+        acc_curr = get_base_currency_readonly(sess)
+    else:
+        acc_curr = DEFAULT_BASE_CURRENCY
     acc_spec = get_currency_spec(acc_curr)
 
     if orig_amt_float is not None and orig_curr:
@@ -80,7 +93,7 @@ def _to_transaction_response(tx: Transaction) -> TransactionResponse:
     clean_merchant = tx.merchant.strip() if tx.merchant and tx.merchant.strip() else None
     display_merchant = clean_merchant or "Merchant not recorded"
     is_unassigned = tx.account_id is None
-    receipt_url = f"/static/{tx.receipt_path}" if tx.receipt_path else None
+    receipt_url = build_transaction_receipt_url(tx.id, "source") if tx.receipt_path else None
 
     dest_tx_date = None
     dest_eff_ts = None
@@ -95,7 +108,8 @@ def _to_transaction_response(tx: Transaction) -> TransactionResponse:
         sess = object_session(tx)
         if sess is not None:
             from app.core.review_suggestions import get_transfer_provenance
-            transfer_prov = get_transfer_provenance(sess, tx.id)
+            raw_prov = get_transfer_provenance(sess, tx.id)
+            transfer_prov = normalize_transfer_provenance_urls(raw_prov, tx.id)
             if transfer_prov:
                 dest_leg = transfer_prov.get("destination_leg") or {}
                 if dest_leg.get("transaction_date"):
@@ -112,8 +126,10 @@ def _to_transaction_response(tx: Transaction) -> TransactionResponse:
                 dest_notes = dest_leg.get("notes")
                 dest_entry_method = dest_leg.get("entry_method")
                 dest_receipt_path = dest_leg.get("receipt_path")
-                dest_receipt_url = dest_leg.get("receipt_url") or (
-                    f"/static/{dest_receipt_path}" if dest_receipt_path else None
+                dest_receipt_url = (
+                    build_transaction_receipt_url(tx.id, "destination")
+                    if dest_receipt_path
+                    else None
                 )
 
     return TransactionResponse(
@@ -829,6 +845,42 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
         )
     return _to_transaction_response(tx)
 
+
+@router.get("/{transaction_id}/receipt")
+def serve_transaction_receipt(
+    transaction_id: int,
+    leg: Literal["source", "destination"] = Query("source"),
+    download: bool = Query(False),
+    db: Session = Depends(get_db),
+    profile: ProfileMetadata = Depends(get_current_profile),
+):
+    """Stream or download the receipt file authorized by a profile's transaction or transfer leg."""
+    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Receipt attachment not found.",
+        )
+
+    target_raw_path: Optional[str] = None
+    if leg == "destination":
+        if tx.transaction_type == TransactionType.TRANSFER:
+            from app.core.review_suggestions import get_transfer_provenance
+
+            prov = get_transfer_provenance(db, tx.id) or {}
+            dest_leg = prov.get("destination_leg") or {}
+            target_raw_path = dest_leg.get("receipt_path")
+    else:
+        target_raw_path = tx.receipt_path
+        if not target_raw_path and tx.transaction_type == TransactionType.TRANSFER:
+            from app.core.review_suggestions import get_transfer_provenance
+
+            prov = get_transfer_provenance(db, tx.id) or {}
+            source_leg = prov.get("source_leg") or {}
+            target_raw_path = source_leg.get("receipt_path")
+
+    return build_receipt_file_response(target_raw_path, profile, download=download)
+
 @router.put("/{transaction_id}", response_model=TransactionResponse)
 def update_transaction(transaction_id: int, payload: TransactionUpdate, db: Session = Depends(get_db)):
     """Updates a transaction atomically."""
@@ -1031,6 +1083,7 @@ def update_transaction(transaction_id: int, payload: TransactionUpdate, db: Sess
     db.commit()
     db.refresh(tx)
     return _to_transaction_response(tx)
+
 
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):

@@ -3,11 +3,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status, Response
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db, get_current_profile
 from app.core.profiles import ProfileMetadata
+from app.core.receipts import (
+    build_receipt_file_response,
+    build_staging_receipt_url,
+)
 from app.config import STAGING_RECEIPTS_DIR, ARCHIVE_RECEIPTS_DIR, DATA_DIR
 from app.models import StagingItem, StagingStatus, Account, ExpenseNature
 from app.schemas import (
@@ -64,10 +67,7 @@ def _to_staging_response(item: StagingItem, db: Session) -> StagingItemResponse:
     formatted_amt = format_pence(item.extracted_amount_pence) if item.extracted_amount_pence is not None else None
 
     # Receipt URL
-    receipt_url = None
-    if item.temp_file_path:
-        fname = Path(item.temp_file_path).name
-        receipt_url = f"/api/staging/receipts/{fname}"
+    receipt_url = build_staging_receipt_url(item.id) if item.temp_file_path else None
 
     orig_amt = payload.get("original_amount")
     orig_curr = payload.get("original_currency")
@@ -480,17 +480,6 @@ def import_commit_endpoint(
         message=commit_message
     )
 
-@router.get("/receipts/{filename}")
-def serve_staging_receipt(filename: str, profile: ProfileMetadata = Depends(get_current_profile)):
-    """Serves a staged or archived receipt image file for preview."""
-    safe_name = Path(filename).name
-    file_path = profile.staging_receipts_dir / safe_name
-    if not file_path.exists() or not file_path.is_file():
-        file_path = profile.receipts_dir / safe_name
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt file not found.")
-    return FileResponse(file_path)
-
 # --- Mapping Profile Endpoints (Registered before /{item_id} to avoid int parsing collisions) ---
 
 @router.get("/profiles", response_model=List[StatementMappingProfile])
@@ -652,6 +641,21 @@ def get_staging_item(item_id: int, db: Session = Depends(get_db)):
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staging item not found.")
     return _to_staging_response(item, db)
+
+
+@router.get("/{item_id}/receipt")
+def serve_staging_item_receipt(
+    item_id: int,
+    download: bool = Query(False),
+    db: Session = Depends(get_db),
+    profile: ProfileMetadata = Depends(get_current_profile),
+):
+    """Stream or download a staged or archived receipt file authorized by a staging record."""
+    item = db.query(StagingItem).filter(StagingItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt attachment not found.")
+
+    return build_receipt_file_response(item.temp_file_path, profile, download=download)
 
 @router.put("/{item_id}", response_model=StagingItemResponse)
 def update_staging_item_endpoint(

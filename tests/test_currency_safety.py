@@ -390,10 +390,51 @@ def test_api_system_config_endpoint(client, isolated_db):
     assert data["base_currency"] == "GBP"
     assert data["base_currency_symbol"] == "£"
     assert data["base_currency_decimals"] == 2
+    assert data["app_timezone"] == "Europe/London"
     assert "supported_currencies" in data
     assert "USD" in data["supported_currencies"]
     assert data["supported_currencies"]["USD"]["symbol"] == "$"
     assert data["supported_currencies"]["USD"]["can_be_base"] is True
     assert "JPY" in data["supported_currencies"]
     assert data["supported_currencies"]["JPY"]["can_be_base"] is False
+
+
+def test_first_run_app_timezone_initialization_and_preservation(isolated_db, monkeypatch, capsys):
+    """Verifies APP_TIMEZONE initializes empty DBs and never silently overwrites initialized DBs."""
+    from app.core.timezone import get_effective_app_timezone, get_stored_app_timezone
+
+    monkeypatch.setenv("APP_TIMEZONE", "America/New_York")
+    assert get_stored_app_timezone(isolated_db) is None
+    assert get_effective_app_timezone(isolated_db) == "America/New_York"
+    assert get_stored_app_timezone(isolated_db) == "America/New_York"
+
+    # Changing APP_TIMEZONE afterward preserves the initialized workspace timezone
+    monkeypatch.setenv("APP_TIMEZONE", "Asia/Tokyo")
+    assert get_effective_app_timezone(isolated_db) == "America/New_York"
+    captured = capsys.readouterr()
+    assert "APP_TIMEZONE='Asia/Tokyo' ignored" in captured.err
+
+
+def test_invalid_app_timezone_rejected_on_first_init(isolated_db, monkeypatch):
+    from app.core.timezone import get_effective_app_timezone
+
+    monkeypatch.setenv("APP_TIMEZONE", "Invalid/Zone_XYZ")
+    with pytest.raises(ValueError, match="Invalid APP_TIMEZONE"):
+        get_effective_app_timezone(isolated_db)
+
+
+def test_unassigned_transaction_formats_with_profile_base_currency(client, isolated_db, monkeypatch):
+    """Unassigned transactions (account_id=None) must format using the DB base currency, not hardcoded GBP."""
+    monkeypatch.setenv("BASE_CURRENCY", "USD")
+    get_effective_base_currency(isolated_db)
+
+    res = client.post("/api/transactions", json={
+        "transaction_type": "expense",
+        "amount": 19.99,
+        "merchant": "Corner Bakery",
+    })
+    assert res.status_code == 201
+    data = res.json()
+    assert data["is_unassigned"] is True
+    assert data["formatted_amount"] == "$19.99"
 

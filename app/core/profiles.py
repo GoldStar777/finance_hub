@@ -83,17 +83,8 @@ class ProfileMetadata:
 
 def _get_alembic_head_revision() -> str:
     """Determines current Alembic head revision dynamically or falls back to known head."""
-    try:
-        from alembic.config import Config
-        from alembic.script import ScriptDirectory
-        cfg = Config("alembic.ini")
-        script = ScriptDirectory.from_config(cfg)
-        head = script.get_current_head()
-        if head:
-            return head
-    except Exception:
-        pass
-    return "c3d4e5f6a7b9"
+    from app.database import get_alembic_head_revision
+    return get_alembic_head_revision()
 
 def _load_registry_data() -> Dict[str, Any]:
     """Reads profiles.json, initializing with default profile if missing."""
@@ -282,25 +273,12 @@ def create_profile(name: str) -> ProfileMetadata:
         new_profile.backups_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize SQLite database with complete schema at Alembic head
-        from app.database import configure_sqlite_engine, Base
-        import app.models  # Ensure all model tables are registered
+        from app.database import configure_sqlite_engine, initialize_database_schema
         
         db_url = f"sqlite:///{new_profile.db_path}"
         engine = configure_sqlite_engine(db_url)
         try:
-            # 1. Create all application tables
-            Base.metadata.create_all(bind=engine)
-
-            # 2. Stamp Alembic head revision so future migrations apply seamlessly
-            head_rev = _get_alembic_head_revision()
-            with engine.begin() as conn:
-                conn.execute(
-                    text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);")
-                )
-                conn.execute(
-                    text("INSERT INTO alembic_version (version_num) VALUES (:rev);"),
-                    {"rev": head_rev}
-                )
+            initialize_database_schema(engine)
         finally:
             engine.dispose()
 

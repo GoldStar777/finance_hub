@@ -16,7 +16,7 @@ from app.schemas import (
     CurrencySpecResponse,
 )
 from app.core.currency import get_base_currency_spec, SUPPORTED_CURRENCIES
-from app.core.timezone import get_app_timezone
+from app.core.timezone import get_effective_app_timezone
 from app.core.backup import (
     generate_backup_bundle,
     list_existing_backups,
@@ -47,7 +47,7 @@ def get_system_config(db: Session = Depends(get_db)):
         base_currency_decimals=spec.precision,
         base_currency_name=spec.name,
         supported_currencies=supported,
-        app_timezone=get_app_timezone(db)
+        app_timezone=get_effective_app_timezone(db)
     )
 
 @router.get("/settings", response_model=SystemSettingsResponse)

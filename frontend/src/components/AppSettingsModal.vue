@@ -411,6 +411,41 @@
             </div>
           </div>
         </div>
+
+        <!-- Workspace Currency & Timezone Info (Read-Only Initialization Explanation) -->
+        <div class="space-y-2.5 pt-3 border-t border-brand-border dark:border-brand-darkborder">
+          <div class="flex items-center justify-between">
+            <h3 class="font-mono text-xs uppercase tracking-wider font-bold text-slate-500 dark:text-slate-400">
+              Ledger Currency &amp; Timezone
+            </h3>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500">
+              Local Only &middot; ./data
+            </span>
+          </div>
+
+          <div class="p-3.5 rounded-xl border border-brand-border dark:border-brand-darkborder bg-slate-50/60 dark:bg-slate-800/40 space-y-2 text-xs">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <span class="text-[10px] font-mono uppercase text-slate-400 block">Base Currency</span>
+                <span class="font-bold text-slate-900 dark:text-white">
+                  {{ systemStore.config?.base_currency || 'GBP' }} ({{ systemStore.config?.base_currency_symbol || '£' }})
+                </span>
+                <span class="text-[11px] text-slate-500 dark:text-slate-400 ml-1">
+                  {{ systemStore.config?.base_currency_name || 'British Pound' }}
+                </span>
+              </div>
+              <div>
+                <span class="text-[10px] font-mono uppercase text-slate-400 block">Workspace Timezone</span>
+                <span class="font-mono font-bold text-slate-900 dark:text-white">
+                  {{ systemStore.config?.app_timezone || 'Europe/London' }}
+                </span>
+              </div>
+            </div>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed pt-1 border-t border-brand-border/60 dark:border-brand-darkborder/60">
+              Base currency is locked in SQLite on first initialization (<code class="font-mono">BASE_CURRENCY</code> in <code class="font-mono">.env</code>) so existing monetary amounts are never silently re-labeled. Timezone (<code class="font-mono">APP_TIMEZONE</code> / <code class="font-mono">app_timezone</code>) controls local calendar-day cutoffs and balance anchors without altering stored UTC timestamps.
+            </p>
+          </div>
+        </div>
       </div>
 
       <!-- Tab 2: Backups & Data Safety -->
@@ -455,7 +490,7 @@
             <div>
               <h3 class="text-xs font-bold text-slate-900 dark:text-white">Create On-Demand Backup</h3>
               <p class="text-[11px] text-slate-500 dark:text-slate-400">
-                Generates a clean SQLite backup archive with all receipts, statements, and attachments into data/backups/.
+                Generates a clean SQLite backup archive with all receipts, statements, and attachments into <code class="font-mono">{{ activeBackupFolderLabel }}</code>.
               </p>
             </div>
             <button 
@@ -529,7 +564,7 @@
           </div>
 
           <div v-else-if="systemStore.archives.length === 0" class="p-6 rounded-xl border border-brand-border dark:border-brand-darkborder text-center text-xs text-slate-400">
-            No backup archives found in data/backups/. Create one above to establish your recovery point.
+            No backup archives found in <code class="font-mono">{{ activeBackupFolderLabel }}</code>. Create one above to establish your recovery point.
           </div>
 
           <div v-else class="space-y-2">
@@ -557,14 +592,14 @@
                 </div>
               </div>
 
-              <a
-                :href="api.getBackupDownloadUrl(arc.filename)"
-                download
+              <button
+                type="button"
+                @click="handleDownloadBackup(arc.filename)"
                 class="px-3 py-1.5 rounded-full border border-brand-border dark:border-brand-darkborder hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 transition shrink-0 flex items-center space-x-1"
                 title="Download portable ZIP archive">
                 <span>Download</span>
                 <span>&darr;</span>
-              </a>
+              </button>
             </div>
           </div>
         </div>
@@ -573,10 +608,10 @@
         <div class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 text-[11px] text-slate-500 dark:text-slate-400 space-y-1.5">
           <span class="font-bold text-slate-700 dark:text-slate-300 block">Offline Database Restoration:</span>
           <p>
-            To prevent database corruption, restoration is strictly an offline utility. Run the following command with the server stopped:
+            To prevent database corruption, restoration is strictly an offline utility. Stop Finance Hub, then run the command for the active workspace:
           </p>
-          <code class="block font-mono text-[10px] bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200">
-            python -m app.restore data/backups/finance_hub_backup_YYYY-MM-DD_HHMMSS.zip
+          <code class="block font-mono text-[10px] bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 break-all">
+            {{ restoreCommandHint }}
           </code>
           <p class="text-[10px]">
             The utility checks for active locks, creates an automatic pre-restore safety copy, verifies database integrity, and safely clears stale WAL journals before file replacement.
@@ -598,7 +633,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useSystemStore } from '../stores/system';
 import { useThemeStore } from '../stores/theme';
 import { useStealthStore } from '../stores/stealth';
@@ -637,6 +672,31 @@ const frequencyDays = ref(30);
 const categoryConfidence = ref<'cautious' | 'balanced' | 'permissive'>('balanced');
 const accountConfidence = ref<'cautious' | 'balanced' | 'permissive'>('balanced');
 const confidenceStatus = ref<'idle' | 'saving' | 'saved'>('idle');
+
+const activeBackupFolderLabel = computed(() => {
+  const prof = profilesStore.activeProfile;
+  if (!prof || prof.id === 'default') {
+    return 'data/backups/';
+  }
+  return `data/profiles/${prof.id}/backups/`;
+});
+
+const restoreCommandHint = computed(() => {
+  const prof = profilesStore.activeProfile;
+  if (!prof || prof.id === 'default') {
+    return './venv/bin/python -m app.restore data/backups/finance_hub_backup_YYYY-MM-DD_HHMMSS.zip';
+  }
+  return `./venv/bin/python -m app.restore data/profiles/${prof.id}/backups/finance_hub_backup_YYYY-MM-DD_HHMMSS.zip --profile "${prof.name}"`;
+});
+
+async function handleDownloadBackup(filename: string) {
+  systemStore.error = null;
+  try {
+    await api.downloadBackupArchive(filename);
+  } catch (err: any) {
+    systemStore.error = err.message || 'Failed to download backup archive.';
+  }
+}
 
 async function setCategoryConfidence(level: 'cautious' | 'balanced' | 'permissive') {
   categoryConfidence.value = level;

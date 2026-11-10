@@ -247,7 +247,7 @@ def test_cross_platform_requirements_env_example_and_vision_fallback():
         assert 'sys_platform == "darwin"' in line, f"pyobjc dependency must be gated to macOS: {line}"
 
     env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
-    for key in ("APP_PORT=8050", "BASE_CURRENCY=GBP", "BACKUP_DIR"):
+    for key in ("APP_PORT=8050", "BASE_CURRENCY=GBP", "APP_TIMEZONE=Europe/London", "BACKUP_DIR"):
         assert key in env_example, f".env.example should document {key}"
 
     # Verify app/vision_parser.py imports cleanly when Quartz/Vision are absent (Linux/Windows simulation)
@@ -283,8 +283,10 @@ def test_readme_documents_real_entrypoints_scripts_and_commands():
         ".env.example",
         "APP_PORT",
         "BASE_CURRENCY",
+        "APP_TIMEZONE",
         "BACKUP_DIR",
         "app_timezone",
+        "finance_hub_backup_YYYY-MM-DD_HHMMSS.zip",
         "python -m app.restore",
         "./venv/bin/pytest",
         "npm --prefix frontend test",
@@ -407,7 +409,7 @@ def test_sandbox_install_idempotency_and_uninstall_data_preservation(tmp_path, p
     assert purge_refused.returncode != 0
     assert (sandbox_proj / "data" / "finances.db").exists()
 
-    # Dry-run --purge-data must preview and still preserve ./data
+    # Dry-run --purge-data must preview exact contents and still preserve ./data
     purge_dry = subprocess.run(
         [str(sandbox_proj / "scripts" / "uninstall.sh"), "--dry-run", "--purge-data"],
         cwd=str(sandbox_proj),
@@ -417,6 +419,10 @@ def test_sandbox_install_idempotency_and_uninstall_data_preservation(tmp_path, p
     )
     assert purge_dry.returncode == 0
     assert "[DRY-RUN]" in purge_dry.stdout
+    assert "SQLite DBs: 2" in purge_dry.stdout
+    assert "backup ZIPs: 1" in purge_dry.stdout
+    assert "finances.db" in purge_dry.stdout
+    assert "backup_sentinel.zip" in purge_dry.stdout
     assert (sandbox_proj / "data" / "finances.db").exists()
 
     # Explicit --purge-data --yes removes ./data while still leaving .env intact
@@ -430,3 +436,81 @@ def test_sandbox_install_idempotency_and_uninstall_data_preservation(tmp_path, p
     assert purge_confirmed.returncode == 0, purge_confirmed.stdout + purge_confirmed.stderr
     assert not (sandbox_proj / "data").exists()
     assert (sandbox_proj / ".env").read_text(encoding="utf-8") == "APP_PORT=8077\n"
+
+
+def test_fresh_database_initialization_stamps_alembic_head_and_upgrades_cleanly(tmp_path):
+    """Verifies brand-new DB creation stamps Alembic head so `alembic upgrade head` is safe."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect as sa_inspect, text
+    from app.database import configure_sqlite_engine, get_alembic_head_revision, initialize_database_schema
+
+    db_path = tmp_path / "fresh_init.db"
+    eng = configure_sqlite_engine(f"sqlite:///{db_path}")
+    try:
+        initialize_database_schema(eng)
+        with eng.connect() as conn:
+            ver = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert ver == get_alembic_head_revision()
+    finally:
+        eng.dispose()
+
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(cfg, "head")
+
+    # Legacy DB with pre-existing tables but no alembic_version must NOT be falsely stamped
+    legacy_db = tmp_path / "legacy_unversioned.db"
+    legacy_eng = configure_sqlite_engine(f"sqlite:///{legacy_db}")
+    try:
+        with legacy_eng.begin() as conn:
+            conn.execute(text("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT);"))
+        initialize_database_schema(legacy_eng)
+        tables = set(sa_inspect(legacy_eng).get_table_names())
+        assert "alembic_version" not in tables
+    finally:
+        legacy_eng.dispose()
+
+
+def test_config_app_port_validation_and_install_dry_run_env_awareness(tmp_path):
+    from app.config import _parse_app_port
+
+    assert _parse_app_port("8050") == 8050
+    assert _parse_app_port("18050") == 18050
+    for bad in ("abc", "0", "65536", "-1"):
+        with pytest.raises(ValueError, match="APP_PORT"):
+            _parse_app_port(bad)
+
+    sandbox_proj, _, env = _setup_isolated_sandbox(tmp_path, "Linux")
+    # Remove sentinel DB & .env to simulate a brand-new clone
+    shutil.rmtree(sandbox_proj / "data")
+    (sandbox_proj / ".env").unlink()
+
+    fresh_dry = subprocess.run(
+        [str(sandbox_proj / "scripts" / "install.sh"), "--dry-run"],
+        cwd=str(sandbox_proj),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert fresh_dry.returncode == 0, fresh_dry.stderr
+    assert "Fresh installation detected" in fresh_dry.stdout
+    assert "BASE_CURRENCY=GBP" in fresh_dry.stdout
+    assert "APP_TIMEZONE=Europe/London" in fresh_dry.stdout
+
+    # When .env specifies custom APP_PORT, BASE_CURRENCY, and APP_TIMEZONE, dry-run reflects them
+    (sandbox_proj / ".env").write_text(
+        "APP_PORT=8079\nBASE_CURRENCY=USD\nAPP_TIMEZONE=America/New_York\n",
+        encoding="utf-8",
+    )
+    custom_dry = subprocess.run(
+        [str(sandbox_proj / "scripts" / "install.sh"), "--dry-run", "--no-service"],
+        cwd=str(sandbox_proj),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert custom_dry.returncode == 0, custom_dry.stderr
+    assert "http://127.0.0.1:8079" in custom_dry.stdout
+    assert "BASE_CURRENCY=USD" in custom_dry.stdout
+    assert "APP_TIMEZONE=America/New_York" in custom_dry.stdout

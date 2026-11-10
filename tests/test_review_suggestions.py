@@ -645,7 +645,7 @@ def test_paired_transfer_preserves_per_leg_timestamps_provenance_files_and_suppo
     assert resp.merchant == "BARCLAYCARD PAYMENT"
     assert resp.entry_method == "csv"
     assert resp.receipt_path == "receipts/2026/10/hsbc_stmt.csv"
-    assert resp.receipt_url == "/static/receipts/2026/10/hsbc_stmt.csv"
+    assert resp.receipt_url == f"/api/transactions/{paired_tx.id}/receipt"
 
     assert ensure_utc(resp.destination_transaction_date) == dest_dt
     assert ensure_utc(resp.destination_effective_timestamp) == dest_dt
@@ -653,8 +653,10 @@ def test_paired_transfer_preserves_per_leg_timestamps_provenance_files_and_suppo
     assert resp.destination_notes == "Direct credit cleared"
     assert resp.destination_entry_method == "pdf_statement"
     assert resp.destination_receipt_path == "receipts/2026/10/barclaycard_stmt.pdf"
-    assert resp.destination_receipt_url == "/static/receipts/2026/10/barclaycard_stmt.pdf"
+    assert resp.destination_receipt_url == f"/api/transactions/{paired_tx.id}/receipt?leg=destination"
     assert resp.transfer_provenance is not None
+    assert resp.transfer_provenance["source_leg"]["receipt_url"] == f"/api/transactions/{paired_tx.id}/receipt"
+    assert resp.transfer_provenance["destination_leg"]["receipt_url"] == f"/api/transactions/{paired_tx.id}/receipt?leg=destination"
     assert resp.transfer_provenance["pair_kind"] == "ledger_ledger"
 
     # 3. Reverse the pairing via unpair_transfer_transaction and verify full restoration

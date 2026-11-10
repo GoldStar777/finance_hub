@@ -158,6 +158,7 @@ export interface Transaction {
   notes?: string | null;
   entry_method: string;
   receipt_path?: string | null;
+  receipt_url?: string | null;
   account_id?: number | null;
   account_name?: string | null;
   account_color?: string | null;
@@ -165,6 +166,8 @@ export interface Transaction {
   destination_account_id?: number | null;
   destination_account_name?: string | null;
   destination_account_color?: string | null;
+  destination_receipt_path?: string | null;
+  destination_receipt_url?: string | null;
   category_id?: number | null;
   category_name?: string | null;
   category_color?: string | null;

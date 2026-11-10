@@ -51,6 +51,23 @@ log_err() {
   printf '[ERROR] %s\n' "$1" >&2
 }
 
+read_env_setting() {
+  local key="$1"
+  local env_file="${PROJECT_DIR}/.env"
+  if [[ ! -f "${env_file}" ]]; then
+    return 0
+  fi
+  local line
+  line="$(grep -E "^[[:space:]]*${key}=" "${env_file}" | tail -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    return 0
+  fi
+  local val="${line#*=}"
+  val="${val%%#*}"
+  val="$(printf '%s' "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+  printf '%s' "${val}"
+}
+
 xml_escape() {
   local s="$1"
   s="${s//&/&amp;}"
@@ -215,14 +232,28 @@ else
   )
 fi
 
-# 5. Optional .env guidance
+# 5. First-run .env & currency/timezone guidance
+ENV_PORT="$(read_env_setting APP_PORT)"
+ENV_CURRENCY="$(read_env_setting BASE_CURRENCY)"
+ENV_TZ="$(read_env_setting APP_TIMEZONE)"
+DISPLAY_PORT="${CUSTOM_PORT:-${ENV_PORT:-8050}}"
+INIT_CURRENCY="${ENV_CURRENCY:-GBP}"
+INIT_TZ="${ENV_TZ:-Europe/London}"
+
 if [[ ! -f "${PROJECT_DIR}/.env" ]] && [[ -f "${PROJECT_DIR}/.env.example" ]]; then
-  log_info "Optional configuration: copy ${PROJECT_DIR}/.env.example to ${PROJECT_DIR}/.env if you wish to customize APP_PORT, BASE_CURRENCY, or BACKUP_DIR."
+  log_info "Optional configuration: copy ${PROJECT_DIR}/.env.example to ${PROJECT_DIR}/.env if you wish to customize APP_PORT, BASE_CURRENCY, APP_TIMEZONE, or BACKUP_DIR."
+fi
+
+if [[ ! -f "${DATA_DIR}/finances.db" ]]; then
+  log_info "Fresh installation detected: first startup will initialize ./data/finances.db with BASE_CURRENCY=${INIT_CURRENCY} and APP_TIMEZONE=${INIT_TZ}."
+  if [[ ! -f "${PROJECT_DIR}/.env" ]] && [[ "${NO_SERVICE}" -eq 0 ]]; then
+    log_info "Note: Starting the background service now locks BASE_CURRENCY=${INIT_CURRENCY} in SQLite. To choose another currency first, run with --no-service or copy .env.example to .env before starting."
+  fi
 fi
 
 # 6. Register background user service (unless --no-service)
 if [[ "${NO_SERVICE}" -eq 1 ]]; then
-  log_info "Skipping background service setup (--no-service). Start manually with: ${VENV_PYTHON} ${PROJECT_DIR}/run.py"
+  log_info "Skipping background service setup (--no-service). Start manually with: ${VENV_PYTHON} ${PROJECT_DIR}/run.py (URL once running: http://127.0.0.1:${DISPLAY_PORT})"
   exit 0
 fi
 
@@ -358,4 +389,4 @@ case "${OS_KIND}" in
     ;;
 esac
 
-log_info "Install/upgrade complete. Open http://127.0.0.1:${CUSTOM_PORT:-8050} once running."
+log_info "Install/upgrade complete. Open http://127.0.0.1:${DISPLAY_PORT} once running."

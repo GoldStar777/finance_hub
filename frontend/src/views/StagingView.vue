@@ -447,10 +447,11 @@
                   <!-- Receipt Thumbnail -->
                   <button 
                     v-if="item.receipt_url"
-                    @click="previewReceiptImage = item.receipt_url"
-                    class="w-6 h-6 rounded border border-brand-border dark:border-brand-darkborder overflow-hidden shrink-0 hover:opacity-80 transition"
-                    title="View receipt image">
-                    <img :src="item.receipt_url" class="w-full h-full object-cover" />
+                    @click="openStagingReceiptPreview(item)"
+                    class="w-6 h-6 rounded border border-brand-border dark:border-brand-darkborder overflow-hidden shrink-0 hover:opacity-80 transition flex items-center justify-center bg-slate-100 dark:bg-slate-800 text-[10px]"
+                    title="View receipt attachment">
+                    <img v-if="stagingThumbUrls[item.id]" :src="stagingThumbUrls[item.id]" class="w-full h-full object-cover" />
+                    <span v-else>📎</span>
                   </button>
 
                   <div class="truncate">
@@ -885,14 +886,22 @@
     </div>
 
     <!-- Receipt Lightbox Modal -->
-    <div v-if="previewReceiptImage" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn" @click="previewReceiptImage = null">
-      <div class="relative max-w-2xl max-h-[90vh] overflow-hidden rounded-2xl" @click.stop>
+    <div v-if="previewReceiptImage || previewReceiptError" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn" @click="closeStagingReceiptPreview">
+      <div class="relative max-w-2xl max-h-[90vh] overflow-hidden rounded-2xl bg-slate-900/95 p-4" @click.stop>
         <button 
-          @click="previewReceiptImage = null"
+          @click="closeStagingReceiptPreview"
           class="absolute top-3 right-3 w-8 h-8 rounded-full bg-slate-900/80 text-white flex items-center justify-center font-bold hover:bg-slate-900 transition">
           &times;
         </button>
-        <img :src="previewReceiptImage" class="w-full h-auto max-h-[85vh] object-contain rounded-2xl" />
+        <div v-if="previewReceiptError" class="p-6 text-xs text-rose-300 max-w-md">
+          {{ previewReceiptError }}
+        </div>
+        <iframe
+          v-else-if="previewReceiptImage && previewReceiptIsPdf"
+          :src="previewReceiptImage"
+          title="Staged receipt PDF preview"
+          class="w-[75vw] max-w-2xl h-[75vh] bg-white rounded-xl" />
+        <img v-else-if="previewReceiptImage" :src="previewReceiptImage" class="w-full h-auto max-h-[85vh] object-contain rounded-2xl" />
       </div>
     </div>
 
@@ -924,8 +933,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { api, getActiveProfileId } from '../api/client';
 import { useStagingStore } from '../stores/staging';
 import { useAccountsStore } from '../stores/accounts';
 import { useTransactionsStore } from '../stores/transactions';
@@ -992,6 +1002,95 @@ async function handleDismissSuggestion(sugId: string) {
 const activeDuplicateItem = ref<StagingItem | null>(null);
 const editingItem = ref<StagingItem | null>(null);
 const previewReceiptImage = ref<string | null>(null);
+const previewReceiptIsPdf = ref(false);
+const previewReceiptError = ref<string | null>(null);
+const stagingThumbUrls = ref<Record<number, string>>({});
+let previewModalOwnedBlobUrl: string | null = null;
+const loadedThumbKeys = new Map<number, string>();
+
+function revokeThumbUrl(itemId: number) {
+  const existing = stagingThumbUrls.value[itemId];
+  if (existing) {
+    URL.revokeObjectURL(existing);
+    const copy = { ...stagingThumbUrls.value };
+    delete copy[itemId];
+    stagingThumbUrls.value = copy;
+  }
+  loadedThumbKeys.delete(itemId);
+}
+
+function revokeAllThumbUrls() {
+  for (const url of Object.values(stagingThumbUrls.value)) {
+    URL.revokeObjectURL(url);
+  }
+  stagingThumbUrls.value = {};
+  loadedThumbKeys.clear();
+}
+
+function closeStagingReceiptPreview() {
+  if (previewModalOwnedBlobUrl) {
+    URL.revokeObjectURL(previewModalOwnedBlobUrl);
+    previewModalOwnedBlobUrl = null;
+  }
+  previewReceiptImage.value = null;
+  previewReceiptIsPdf.value = false;
+  previewReceiptError.value = null;
+}
+
+async function openStagingReceiptPreview(item: StagingItem) {
+  closeStagingReceiptPreview();
+  if (stagingThumbUrls.value[item.id]) {
+    previewReceiptImage.value = stagingThumbUrls.value[item.id];
+    previewReceiptIsPdf.value = false;
+    return;
+  }
+  if (!item.receipt_url) return;
+  try {
+    const res = await api.fetchReceiptAttachment(item.receipt_url);
+    previewModalOwnedBlobUrl = res.blobUrl;
+    previewReceiptIsPdf.value = res.contentType.includes('pdf');
+    previewReceiptImage.value = res.blobUrl;
+  } catch (err: any) {
+    previewReceiptError.value = err?.message || 'Receipt attachment could not be loaded.';
+  }
+}
+
+watch(
+  () => stagingStore.items.map((item) => ({ id: item.id, receipt_url: item.receipt_url })),
+  async (items) => {
+    const profileKey = getActiveProfileId() || 'default';
+    const nextIds = new Set(items.filter((i) => i.receipt_url).map((i) => i.id));
+    for (const existingId of Object.keys(stagingThumbUrls.value).map(Number)) {
+      if (!nextIds.has(existingId)) {
+        revokeThumbUrl(existingId);
+      }
+    }
+    for (const item of items) {
+      if (!item.receipt_url) continue;
+      const cacheKey = `${profileKey}:${item.receipt_url}`;
+      if (loadedThumbKeys.get(item.id) === cacheKey) continue;
+      loadedThumbKeys.set(item.id, cacheKey);
+      try {
+        const res = await api.fetchReceiptAttachment(item.receipt_url);
+        if (loadedThumbKeys.get(item.id) !== cacheKey || !res.contentType.startsWith('image/')) {
+          URL.revokeObjectURL(res.blobUrl);
+          continue;
+        }
+        const prev = stagingThumbUrls.value[item.id];
+        if (prev) URL.revokeObjectURL(prev);
+        stagingThumbUrls.value = { ...stagingThumbUrls.value, [item.id]: res.blobUrl };
+      } catch {
+        // Leave button clickable to surface missing-file feedback on click
+      }
+    }
+  },
+  { immediate: true }
+);
+
+onUnmounted(() => {
+  closeStagingReceiptPreview();
+  revokeAllThumbUrls();
+});
 
 const sourceFilters = [
   { label: 'All Sources', value: 'all' },

@@ -2,11 +2,11 @@ import threading
 from pathlib import Path
 from typing import Optional, Generator
 from fastapi import Request, HTTPException, status
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from app.config import DATABASE_URL, DB_PATH
+from app.config import BASE_DIR, DATABASE_URL, DB_PATH
 
 Base = declarative_base()
 
@@ -74,6 +74,50 @@ def configure_sqlite_engine(url: str) -> Engine:
         cursor.close()
 
     return engine
+
+
+def get_alembic_head_revision() -> str:
+    """Determines current Alembic head revision from alembic.ini relative to BASE_DIR."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        ini_path = BASE_DIR / "alembic.ini"
+        cfg = Config(str(ini_path))
+        script = ScriptDirectory.from_config(cfg)
+        head = script.get_current_head()
+        if head:
+            return head
+    except Exception:
+        pass
+    return "c3d4e5f6a7b9"
+
+
+def initialize_database_schema(target_engine: Engine) -> None:
+    """
+    Safely creates any missing SQLite tables via SQLAlchemy metadata and stamps
+    Alembic's head revision when initializing a brand-new database so subsequent
+    `alembic upgrade head` runs succeed without re-applying initial migrations.
+    """
+    import app.models  # noqa: F401 - ensure all models are registered on Base.metadata
+
+    insp = inspect(target_engine)
+    existing_tables = set(insp.get_table_names())
+    is_brand_new = "accounts" not in existing_tables and "system_settings" not in existing_tables
+
+    Base.metadata.create_all(bind=target_engine)
+
+    if is_brand_new and "alembic_version" not in existing_tables:
+        head_rev = get_alembic_head_revision()
+        with target_engine.begin() as conn:
+            conn.execute(
+                text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);")
+            )
+            cnt = conn.execute(text("SELECT COUNT(*) FROM alembic_version;")).scalar() or 0
+            if cnt == 0:
+                conn.execute(
+                    text("INSERT INTO alembic_version (version_num) VALUES (:rev);"),
+                    {"rev": head_rev},
+                )
 
 class ProfileEngineRegistry:
     """

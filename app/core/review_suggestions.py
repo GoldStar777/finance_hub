@@ -1020,8 +1020,9 @@ def _save_transfer_provenance_in_session(db: Session, transaction_id: int, prove
     so provenance is persisted atomically alongside the transfer transaction.
     """
     from app.models import SystemSetting
+    from app.core.receipts import normalize_transfer_provenance_urls
     current_map = get_transfer_provenance_map(db)
-    current_map[str(transaction_id)] = provenance
+    current_map[str(transaction_id)] = normalize_transfer_provenance_urls(provenance, transaction_id)
     serialized = json.dumps(current_map, indent=2)
     setting = db.query(SystemSetting).filter(SystemSetting.key == TRANSFER_PROVENANCE_SETTING_KEY).first()
     if setting:
@@ -1102,7 +1103,7 @@ def _snapshot_ledger_leg(tx: Transaction, account: Account, surviving_on_tx: boo
         "notes": tx.notes,
         "entry_method": tx.entry_method or "manual",
         "receipt_path": tx.receipt_path,
-        "receipt_url": f"/static/{tx.receipt_path}" if tx.receipt_path else None,
+        "receipt_url": None,
         "category_id": tx.category_id,
         "expense_nature": tx.expense_nature.value if tx.expense_nature else "unclassified",
         "original_amount": str(tx.original_amount) if tx.original_amount is not None else None,
@@ -1137,7 +1138,7 @@ def _snapshot_staging_leg(
         "notes": payload.get("notes"),
         "entry_method": item.source_type or "staging",
         "receipt_path": archived_rel_path,
-        "receipt_url": f"/static/{archived_rel_path}" if archived_rel_path else None,
+        "receipt_url": None,
         "category_id": payload.get("category_id"),
         "expense_nature": item.suggested_expense_nature.value if item.suggested_expense_nature else "unclassified",
         "original_amount": str(payload["original_amount"]) if payload.get("original_amount") is not None else None,

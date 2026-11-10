@@ -6,7 +6,12 @@ import socket
 import subprocess
 from pathlib import Path
 import uvicorn
-from app.config import DEFAULT_PORT
+
+try:
+    from app.config import DEFAULT_PORT
+except ValueError as exc:
+    print(f"[ERROR] {exc}", file=sys.stderr)
+    sys.exit(1)
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -32,6 +37,11 @@ def ensure_port_available(host: str, port: int) -> None:
 def ensure_frontend_built():
     """Builds the frontend if dist does not exist."""
     if not FRONTEND_DIST.exists():
+        if not (FRONTEND_DIR / "node_modules").exists():
+            raise RuntimeError(
+                "Frontend bundle (frontend/dist) and dependencies (frontend/node_modules) are missing. "
+                "Run `./scripts/install.sh` (or `cd frontend && npm ci && npm run build`) first."
+            )
         print("[INFO] Building frontend assets (one-time build)...")
         npm_cmd = shutil.which("npm")
         if not npm_cmd:
@@ -48,10 +58,10 @@ if __name__ == "__main__":
     port = DEFAULT_PORT
     try:
         ensure_port_available("127.0.0.1", port)
-    except RuntimeError as exc:
+        ensure_frontend_built()
+    except (RuntimeError, FileNotFoundError, subprocess.CalledProcessError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
-    ensure_frontend_built()
     print(f"\n=======================================================")
     print(f"  Finance Hub v2.0")
     print(f"  Local Dashboard:  http://127.0.0.1:{port}")

@@ -30,5 +30,16 @@ RECEIPTS_DIR = STAGING_RECEIPTS_DIR
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", str(DATA_DIR / "backups")))
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
+def _parse_app_port(raw_value: str) -> int:
+    """Validates and parses APP_PORT in the valid TCP port range (1-65535)."""
+    try:
+        port = int(str(raw_value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid APP_PORT '{raw_value}'. Expected an integer between 1 and 65535.") from exc
+    if not (1 <= port <= 65535):
+        raise ValueError(f"Invalid APP_PORT '{raw_value}'. Port must be between 1 and 65535.")
+    return port
+
+
 # Default port
-DEFAULT_PORT = int(os.getenv("APP_PORT", "8050"))
+DEFAULT_PORT = _parse_app_port(os.getenv("APP_PORT", "8050"))

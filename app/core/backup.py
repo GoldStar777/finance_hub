@@ -23,7 +23,9 @@ from app.models import (
     AssetSnapshot, SystemSetting, Holding, HoldingValuation, AccountBalanceAnchor
 )
 from app.ledger import LedgerEngine
-from app.core.currency import pence_to_pounds, format_pence
+from app.core.currency import (
+    pence_to_pounds, format_pence, get_effective_base_currency, get_currency_spec
+)
 
 def _compute_sha256(filepath: Path) -> str:
     """Computes SHA-256 hash of a file."""
@@ -102,6 +104,8 @@ def generate_reference_workbook(db: Session, target_path: Path):
     # --- 1. SUMMARY SHEET ---
     ws_sum = wb.create_sheet(title="Summary")
     ws_sum.views.sheetView[0].showGridLines = True
+    base_curr = get_effective_base_currency(db)
+    base_spec = get_currency_spec(base_curr)
     summary_data = LedgerEngine.get_dashboard_summary(db)
 
     ws_sum.cell(row=1, column=1, value="Finance Hub — Executive Backup Summary").font = title_font
@@ -109,7 +113,7 @@ def generate_reference_workbook(db: Session, target_path: Path):
     ws_sum.cell(row=3, column=1, value="Note: This workbook is a human-readable reference report. The database and receipts remain the restorable source.").font = meta_font
 
     ws_sum.cell(row=5, column=1, value="Core Executive Metric").font = Font(bold=True)
-    ws_sum.cell(row=5, column=2, value="Amount (£)").font = Font(bold=True)
+    ws_sum.cell(row=5, column=2, value=f"Amount ({base_spec.symbol})").font = Font(bold=True)
     ws_sum.cell(row=5, column=3, value="Formatted Value").font = Font(bold=True)
 
     metrics = [
@@ -213,7 +217,7 @@ def generate_reference_workbook(db: Session, target_path: Path):
         else:
             display_amt = amt_pounds
 
-        currency_code = tx.account.currency if tx.account else "GBP"
+        currency_code = tx.account.currency if tx.account else base_curr
         orig_amt = float(tx.original_amount) if tx.original_amount is not None else ""
         orig_curr = tx.original_currency or ""
         rate_val = float(tx.exchange_rate) if tx.exchange_rate is not None else ""
@@ -313,7 +317,7 @@ def generate_reference_workbook(db: Session, target_path: Path):
         fx_p = pence_to_pounds(d["fixed"])
         vr_p = pence_to_pounds(d["variable"])
         net_p = in_p - fx_p - vr_p
-        row = [m, in_p, fx_p, vr_p, net_p, "GBP"]
+        row = [m, in_p, fx_p, vr_p, net_p, base_curr]
         ws_cf.append(row)
         curr_row = ws_cf.max_row
         for c in range(2, 6):
@@ -338,7 +342,7 @@ def generate_reference_workbook(db: Session, target_path: Path):
     )
     for sn in snaps:
         acc_name = sn.account.name if sn.account else "Unknown"
-        currency = sn.account.currency if sn.account else "GBP"
+        currency = sn.account.currency if sn.account else base_curr
         eff_str = sn.effective_date.strftime("%Y-%m-%d") if sn.effective_date else ""
         rec_str = sn.created_at.strftime("%Y-%m-%d %H:%M:%S") if sn.created_at else ""
         val_pounds = pence_to_pounds(sn.valuation_pence)
@@ -362,7 +366,7 @@ def generate_reference_workbook(db: Session, target_path: Path):
     holdings = db.query(Holding).options(joinedload(Holding.account)).order_by(Holding.account_id.asc(), Holding.name.asc()).all()
     for h in holdings:
         acc_name = h.account.name if h.account else "Unknown"
-        currency = h.currency or (h.account.currency if h.account else "GBP")
+        currency = h.currency or (h.account.currency if h.account else base_curr)
         latest = get_holding_latest_valuation(db, h.id)
         if latest:
             qty = float(latest.quantity)
@@ -402,7 +406,7 @@ def generate_reference_workbook(db: Session, target_path: Path):
     )
     for a in anchors:
         acc_name = a.account.name if a.account else "Unknown"
-        curr = a.account.currency if a.account else "GBP"
+        curr = a.account.currency if a.account else base_curr
         dt_str = a.anchor_date.strftime("%Y-%m-%d %H:%M:%S") if a.anchor_date else ""
         cr_str = a.created_at.strftime("%Y-%m-%d %H:%M:%S") if a.created_at else ""
         bal_pounds = pence_to_pounds(a.balance_pence)
@@ -512,10 +516,19 @@ def generate_backup_bundle(
                 rel = str(p.relative_to(temp_dir))
                 sha256_map[rel] = _compute_sha256(p)
 
+        from app.database import get_alembic_head_revision
+        schema_rev = None
+        try:
+            schema_rev = db.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar()
+        except Exception:
+            schema_rev = None
+        if not schema_rev:
+            schema_rev = get_alembic_head_revision()
+
         manifest = {
             "backup_timestamp": now.isoformat(),
             "app_version": "2.0.0",
-            "schema_revision": "8d1f2a3c4b5e",
+            "schema_revision": schema_rev,
             "counts": {
                 "accounts": db.query(Account).count(),
                 "transactions": db.query(Transaction).count(),

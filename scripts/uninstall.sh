@@ -59,6 +59,38 @@ log_err() {
   printf '[ERROR] %s\n' "$1" >&2
 }
 
+preview_purge_contents() {
+  local prefix="$1"
+  if [[ ! -e "${DATA_DIR}" ]]; then
+    printf '%s User data directory does not exist (nothing to purge): %s\n' "${prefix}" "${DATA_DIR}"
+    return 0
+  fi
+
+  local size_str db_count zip_count total_files
+  size_str="$(du -sh "${DATA_DIR}" 2>/dev/null | awk '{print $1}' || echo 'unknown')"
+  db_count="$(find "${DATA_DIR}" -type f -name '*.db' 2>/dev/null | wc -l | tr -d ' ')"
+  zip_count="$(find "${DATA_DIR}" -type f -name '*.zip' 2>/dev/null | wc -l | tr -d ' ')"
+  total_files="$(find "${DATA_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')"
+
+  printf '%s Purge scope inside %s (total size: %s, files: %s, SQLite DBs: %s, backup ZIPs: %s):\n' \
+    "${prefix}" "${DATA_DIR}" "${size_str}" "${total_files}" "${db_count}" "${zip_count}"
+
+  if [[ "${total_files}" -gt 0 ]]; then
+    local shown=0
+    while IFS= read -r entry; do
+      shown=$((shown + 1))
+      if [[ "${shown}" -le 30 ]]; then
+        printf '%s   - %s\n' "${prefix}" "${entry}"
+      fi
+    done < <(find "${DATA_DIR}" -mindepth 1 -maxdepth 4 2>/dev/null | sort)
+    if [[ "${shown}" -gt 30 ]]; then
+      printf '%s   ... and %s more path(s) inside %s\n' "${prefix}" "$((shown - 30))" "${DATA_DIR}"
+    fi
+  else
+    printf '%s   - (empty directory tree inside %s)\n' "${prefix}" "${DATA_DIR}"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
@@ -108,7 +140,9 @@ esac
 if [[ "${PURGE_DATA}" -eq 1 ]] && [[ "${DRY_RUN}" -eq 0 ]] && [[ "${ASSUME_YES}" -eq 0 ]]; then
   printf '\n[WARNING] --purge-data will permanently delete all financial data in:\n'
   printf '  %s\n' "${DATA_DIR}"
-  printf 'This includes SQLite databases, workspace profiles, archived/staged receipts, and local backups inside ./data.\n'
+  printf 'This includes SQLite databases, workspace profiles, archived/staged receipts, logs, and local backups inside ./data.\n'
+  preview_purge_contents "[PURGE-PREVIEW]"
+  printf '[KEEP] Local configuration (.env) and any custom BACKUP_DIR outside ./data will remain untouched.\n'
   if [[ -t 0 ]]; then
     printf 'Type DELETE DATA to confirm: '
     IFS= read -r confirm_reply || confirm_reply=""
@@ -207,6 +241,7 @@ if [[ "${PURGE_DATA}" -eq 1 ]]; then
   if [[ -e "${DATA_DIR}" ]]; then
     if [[ "${DRY_RUN}" -eq 1 ]]; then
       log_dry "Would permanently delete user data directory (--purge-data): ${DATA_DIR}"
+      preview_purge_contents "[DRY-RUN]"
     else
       rm -rf "${DATA_DIR}"
       log_info "Deleted user data directory (--purge-data): ${DATA_DIR}"

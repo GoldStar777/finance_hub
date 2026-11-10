@@ -615,9 +615,19 @@
 
               <!-- Description & Notes -->
               <td class="py-3.5 px-4 max-w-xs">
-                <div class="font-bold text-slate-900 dark:text-white truncate">
-                  <span v-if="tx.merchant">{{ tx.merchant }}</span>
-                  <span v-else class="italic text-slate-400 font-normal">Merchant not recorded</span>
+                <div class="font-bold text-slate-900 dark:text-white flex items-center space-x-1.5 min-w-0">
+                  <span v-if="tx.merchant" class="truncate">{{ tx.merchant }}</span>
+                  <span v-else class="italic text-slate-400 font-normal truncate">Merchant not recorded</span>
+                  <button
+                    v-if="hasReceiptAttachment(tx)"
+                    type="button"
+                    data-testid="tx-receipt-btn"
+                    @click.stop="openReceiptAttachment(tx)"
+                    class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition"
+                    :title="getReceiptButtonTitle(tx)"
+                    aria-label="Open receipt attachment">
+                    📎
+                  </button>
                 </div>
                 <div v-if="tx.notes" class="text-[11px] text-slate-400 truncate mt-0.5">
                   {{ tx.notes }}
@@ -876,7 +886,16 @@
               <td class="p-3">
                 <div class="font-semibold text-slate-900 dark:text-white flex items-center space-x-1.5">
                   <span>{{ tx.merchant || 'Unlabelled' }}</span>
-                  <span v-if="tx.receipt_path" class="text-[10px]" title="Receipt file preserved safely">📎</span>
+                  <button
+                    v-if="hasReceiptAttachment(tx)"
+                    type="button"
+                    data-testid="deleted-tx-receipt-btn"
+                    @click.stop="openReceiptAttachment(tx)"
+                    class="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition"
+                    title="Open preserved receipt attachment"
+                    aria-label="Open preserved receipt attachment">
+                    📎
+                  </button>
                 </div>
                 <div v-if="tx.notes" class="text-[11px] text-slate-400 truncate max-w-xs">
                   {{ tx.notes }}
@@ -966,7 +985,7 @@
         <div v-if="txToDelete.transaction_type === 'transfer'" class="p-2.5 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 text-[11px] text-amber-900 dark:text-amber-200">
           ⚠️ <strong>Paired Transfer:</strong> Deleting this transfer removes the money movement from both accounts simultaneously.
         </div>
-        <div v-if="txToDelete.receipt_path" class="p-2.5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/40 text-[11px] text-blue-900 dark:text-blue-200">
+        <div v-if="txToDelete.receipt_path || txToDelete.destination_receipt_path" class="p-2.5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/40 text-[11px] text-blue-900 dark:text-blue-200">
           📎 <strong>Preserved Receipt:</strong> The attached receipt file is kept safely in storage and will not be lost.
         </div>
         <p class="text-[11px] text-slate-500">
@@ -1017,6 +1036,107 @@
       @close="isBulkDeleteModalOpen = false"
       @confirm="handleConfirmBulkDelete" />
 
+    <!-- Receipt Attachment Modal -->
+    <div
+      v-if="receiptModalTx"
+      data-testid="receipt-attachment-modal"
+      class="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+      @click.self="closeReceiptModal">
+      <div class="bg-white dark:bg-brand-darksurface border border-brand-border dark:border-brand-darkborder rounded-2xl max-w-3xl w-full p-5 shadow-2xl space-y-4">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="font-bold text-slate-900 dark:text-white flex items-center space-x-2">
+              <span>📎</span>
+              <span class="truncate">{{ receiptModalTx.merchant || receiptModalTx.display_merchant || 'Transaction Receipt' }}</span>
+            </h3>
+            <p class="text-[11px] text-slate-500 mt-0.5 truncate font-mono">
+              {{ receiptPreviewFilename || activeReceiptLeg?.label || 'Attachment' }}
+            </p>
+          </div>
+          <div class="flex items-center space-x-2 shrink-0">
+            <button
+              v-if="receiptPreviewBlobUrl"
+              type="button"
+              @click="openReceiptInNewTab"
+              class="px-3 py-1.5 text-xs font-semibold rounded-full border border-brand-border dark:border-brand-darkborder hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition">
+              Open in New Tab
+            </button>
+            <button
+              v-if="activeReceiptLeg"
+              type="button"
+              @click="downloadActiveReceipt"
+              :disabled="isLoadingReceipt"
+              class="px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-900 text-white dark:bg-white dark:text-slate-900 hover:opacity-90 disabled:opacity-40 transition">
+              Download
+            </button>
+            <button
+              type="button"
+              @click="closeReceiptModal"
+              class="w-8 h-8 rounded-full border border-brand-border dark:border-brand-darkborder flex items-center justify-center text-slate-500 hover:text-slate-900 dark:hover:text-white transition"
+              aria-label="Close receipt preview">
+              &times;
+            </button>
+          </div>
+        </div>
+
+        <div v-if="receiptAttachmentLegs.length > 1" class="flex items-center space-x-2">
+          <button
+            v-for="leg in receiptAttachmentLegs"
+            :key="leg.leg"
+            type="button"
+            @click="selectReceiptLeg(leg)"
+            class="px-3 py-1 rounded-full text-xs font-semibold transition border"
+            :class="activeReceiptLeg?.leg === leg.leg
+              ? 'bg-indigo-600 text-white border-indigo-600'
+              : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-brand-border dark:border-brand-darkborder hover:bg-slate-100 dark:hover:bg-slate-700'">
+            {{ leg.label }}
+          </button>
+        </div>
+
+        <div v-if="isLoadingReceipt" class="py-16 text-center text-xs text-slate-500 font-mono">
+          Loading receipt attachment securely...
+        </div>
+
+        <div
+          v-else-if="receiptPreviewError"
+          class="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-700 dark:text-rose-300">
+          {{ receiptPreviewError }}
+        </div>
+
+        <div v-else-if="receiptPreviewBlobUrl" class="rounded-xl border border-brand-border dark:border-brand-darkborder bg-slate-50 dark:bg-slate-900/60 overflow-hidden">
+          <img
+            v-if="isImageContentType"
+            :src="receiptPreviewBlobUrl"
+            :alt="receiptPreviewFilename || 'Transaction receipt'"
+            class="w-full h-auto max-h-[68vh] object-contain mx-auto" />
+          <iframe
+            v-else-if="isPdfContentType"
+            :src="receiptPreviewBlobUrl"
+            title="Receipt attachment PDF preview"
+            class="w-full h-[68vh] bg-white" />
+          <div v-else class="p-8 text-center space-y-3">
+            <p class="text-xs text-slate-600 dark:text-slate-300">
+              Preview is not inline for this file type (<span class="font-mono">{{ receiptPreviewContentType }}</span>).
+            </p>
+            <div class="flex items-center justify-center space-x-2">
+              <button
+                type="button"
+                @click="openReceiptInNewTab"
+                class="px-3.5 py-1.5 text-xs font-semibold rounded-full border border-brand-border dark:border-brand-darkborder bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition">
+                Open in New Tab
+              </button>
+              <button
+                type="button"
+                @click="downloadActiveReceipt"
+                class="px-3.5 py-1.5 text-xs font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition">
+                Download Attachment
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Floating Undo Notification Banner -->
     <div 
       v-if="txStore.undoToastMessage" 
@@ -1046,6 +1166,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { api } from '../api/client';
 import { useAccountsStore } from '../stores/accounts';
 import { useTransactionsStore } from '../stores/transactions';
 import { useSystemStore } from '../stores/system';
@@ -1232,7 +1353,128 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleDocumentClick);
+  revokeReceiptPreviewUrl();
 });
+
+// Receipt Attachment Handling
+interface ReceiptLegOption {
+  leg: 'source' | 'destination';
+  label: string;
+  url: string;
+  fallbackName: string;
+}
+
+const receiptModalTx = ref<Transaction | null>(null);
+const activeReceiptLeg = ref<ReceiptLegOption | null>(null);
+const receiptPreviewBlobUrl = ref<string | null>(null);
+const receiptPreviewContentType = ref<string>('');
+const receiptPreviewFilename = ref<string>('');
+const receiptPreviewError = ref<string | null>(null);
+const isLoadingReceipt = ref(false);
+
+function filenameFromPath(rawPath?: string | null, fallback: string = 'receipt'): string {
+  if (!rawPath) return fallback;
+  const parts = rawPath.split('/');
+  return parts[parts.length - 1] || fallback;
+}
+
+function getAvailableReceiptLegs(tx: Transaction | null): ReceiptLegOption[] {
+  if (!tx) return [];
+  const legs: ReceiptLegOption[] = [];
+  if (tx.receipt_url) {
+    legs.push({
+      leg: 'source',
+      label: tx.transaction_type === 'transfer' ? 'Source Leg Receipt' : 'Receipt Attachment',
+      url: tx.receipt_url,
+      fallbackName: filenameFromPath(tx.receipt_path, `transaction_${tx.id}_receipt`),
+    });
+  }
+  if (tx.destination_receipt_url) {
+    legs.push({
+      leg: 'destination',
+      label: 'Destination Leg Receipt',
+      url: tx.destination_receipt_url,
+      fallbackName: filenameFromPath(tx.destination_receipt_path, `transaction_${tx.id}_destination_receipt`),
+    });
+  }
+  return legs;
+}
+
+const receiptAttachmentLegs = computed(() => getAvailableReceiptLegs(receiptModalTx.value));
+const isImageContentType = computed(() => receiptPreviewContentType.value.startsWith('image/'));
+const isPdfContentType = computed(() => receiptPreviewContentType.value.includes('pdf'));
+
+function hasReceiptAttachment(tx: Transaction): boolean {
+  return Boolean(tx.receipt_url || tx.destination_receipt_url);
+}
+
+function getReceiptButtonTitle(tx: Transaction): string {
+  const legs = getAvailableReceiptLegs(tx);
+  if (legs.length > 1) return 'Open or download transfer leg receipts';
+  return tx.deleted_at ? 'Open or download preserved receipt' : 'Open or download receipt attachment';
+}
+
+function revokeReceiptPreviewUrl() {
+  if (receiptPreviewBlobUrl.value) {
+    URL.revokeObjectURL(receiptPreviewBlobUrl.value);
+    receiptPreviewBlobUrl.value = null;
+  }
+}
+
+async function selectReceiptLeg(legOption: ReceiptLegOption) {
+  activeReceiptLeg.value = legOption;
+  isLoadingReceipt.value = true;
+  receiptPreviewError.value = null;
+  receiptPreviewContentType.value = '';
+  receiptPreviewFilename.value = legOption.fallbackName;
+  revokeReceiptPreviewUrl();
+  try {
+    const res = await api.fetchReceiptAttachment(legOption.url, legOption.fallbackName);
+    if (activeReceiptLeg.value?.url !== legOption.url || !receiptModalTx.value) {
+      URL.revokeObjectURL(res.blobUrl);
+      return;
+    }
+    receiptPreviewBlobUrl.value = res.blobUrl;
+    receiptPreviewContentType.value = res.contentType;
+    receiptPreviewFilename.value = res.filename;
+  } catch (err: any) {
+    receiptPreviewError.value = err?.message || 'Receipt attachment could not be loaded.';
+  } finally {
+    isLoadingReceipt.value = false;
+  }
+}
+
+function openReceiptAttachment(tx: Transaction) {
+  const legs = getAvailableReceiptLegs(tx);
+  if (legs.length === 0) return;
+  receiptModalTx.value = tx;
+  selectReceiptLeg(legs[0]);
+}
+
+function closeReceiptModal() {
+  receiptModalTx.value = null;
+  activeReceiptLeg.value = null;
+  receiptPreviewError.value = null;
+  receiptPreviewContentType.value = '';
+  receiptPreviewFilename.value = '';
+  isLoadingReceipt.value = false;
+  revokeReceiptPreviewUrl();
+}
+
+function openReceiptInNewTab() {
+  if (!receiptPreviewBlobUrl.value) return;
+  window.open(receiptPreviewBlobUrl.value, '_blank', 'noopener,noreferrer');
+}
+
+async function downloadActiveReceipt() {
+  if (!activeReceiptLeg.value) return;
+  receiptPreviewError.value = null;
+  try {
+    await api.downloadReceiptAttachment(activeReceiptLeg.value.url, activeReceiptLeg.value.fallbackName);
+  } catch (err: any) {
+    receiptPreviewError.value = err?.message || 'Failed to download receipt attachment.';
+  }
+}
 
 // Clear stale URL filters on workspace switch so new profile's preferences aren't overwritten
 watch(() => profilesStore.activeProfile?.id, (newId, oldId) => {

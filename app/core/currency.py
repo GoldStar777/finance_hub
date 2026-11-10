@@ -94,7 +94,8 @@ def get_effective_base_currency(db: Session) -> str:
                 f"Base currency configuration conflict! "
                 f"Stored base currency in database is '{stored}', but environment variable BASE_CURRENCY is '{env_base_clean}'. "
                 f"To prevent reinterpreting existing financial amounts, the application will not start. "
-                f"Either unset BASE_CURRENCY or restore it to '{stored}'."
+                f"Either unset BASE_CURRENCY or restore it to '{stored}'. "
+                f"(If this is a brand-new empty workspace with no recorded data yet, stop Finance Hub and delete the unpopulated database file before restarting with your chosen BASE_CURRENCY.)"
             )
         return stored
 

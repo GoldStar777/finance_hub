@@ -299,3 +299,48 @@ def test_calendar_month_due_date_calculation_and_month_end_clamping():
     assert next_custom == dt_mid_month + timedelta(days=45)
 
 
+def test_backup_workbook_and_manifest_respect_non_gbp_base_currency(db_session, tmp_path, monkeypatch):
+    """Backup Excel summary/cashflow labels and manifest schema_revision must reflect active DB state."""
+    from app.core.currency import get_effective_base_currency
+    from app.database import get_alembic_head_revision
+
+    monkeypatch.setenv("BASE_CURRENCY", "USD")
+    assert get_effective_base_currency(db_session) == "USD"
+
+    acc = Account(
+        name="Checking USD",
+        account_type=AccountType.CURRENT,
+        starting_balance_pence=25000,
+        currency="USD",
+    )
+    db_session.add(acc)
+    db_session.commit()
+    db_session.refresh(acc)
+
+    tx = Transaction(
+        transaction_date=datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc),
+        transaction_type=TransactionType.EXPENSE,
+        amount_pence=1250,
+        merchant="Unassigned Coffee",
+        account_id=None,
+        expense_nature=ExpenseNature.VARIABLE,
+    )
+    db_session.add(tx)
+    db_session.commit()
+
+    res = generate_backup_bundle(
+        db_session,
+        backup_dir=tmp_path / "usd_backups",
+        staging_receipts_dir=tmp_path / "staging",
+        archive_receipts_dir=tmp_path / "archive",
+    )
+    assert res["manifest"]["schema_revision"] == get_alembic_head_revision()
+
+    with zipfile.ZipFile(res["filepath"], "r") as zf:
+        with zf.open("finance_hub_summary.xlsx") as xf:
+            wb = openpyxl.load_workbook(xf)
+            assert wb["Summary"]["B5"].value == "Amount ($)"
+            assert wb["Cash Flow"].cell(row=2, column=6).value == "USD"
+            assert wb["Transactions"].cell(row=2, column=6).value == "USD"
+
+

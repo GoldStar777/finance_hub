@@ -5,28 +5,88 @@ Centralizes IANA timezone handling across backend queries, balance anchor
 calculations, statement intake, and calendar-day conversions.
 """
 
+import os
+import sys
 from datetime import datetime, date, time, timezone
 from typing import Optional, Union
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy.orm import Session
 
 DEFAULT_APP_TIMEZONE = "Europe/London"
 APP_TIMEZONE_SETTING_KEY = "app_timezone"
 
+def get_stored_app_timezone(db: Session) -> Optional[str]:
+    """Retrieves the stored IANA timezone from system_settings, or None if uninitialized."""
+    from app.models import SystemSetting
+    setting = db.query(SystemSetting).filter(SystemSetting.key == APP_TIMEZONE_SETTING_KEY).first()
+    if setting and setting.value and setting.value.strip():
+        return setting.value.strip()
+    return None
+
+def get_effective_app_timezone(db: Session) -> str:
+    """
+    Authoritative timezone resolution with first-run initialization safety:
+    1. If app_timezone is already stored in system_settings, it remains authoritative
+       so existing calendar-day boundaries and balance anchors are not silently reinterpreted.
+       If APP_TIMEZONE is set in the environment to a different value, warn clearly and keep stored.
+    2. On first-run initialization (when unset in system_settings), read APP_TIMEZONE
+       from environment (defaulting to 'Europe/London'), validate as an IANA timezone,
+       and persist to system_settings.
+    """
+    env_tz = os.getenv("APP_TIMEZONE")
+    env_tz_clean = env_tz.strip() if env_tz and env_tz.strip() else None
+
+    stored = get_stored_app_timezone(db)
+    if stored:
+        try:
+            ZoneInfo(stored)
+            if env_tz_clean and env_tz_clean != stored:
+                print(
+                    f"[WARN] APP_TIMEZONE='{env_tz_clean}' ignored because this database already uses stored "
+                    f"app_timezone='{stored}'. Existing local day boundaries and anchors were preserved unchanged.",
+                    file=sys.stderr,
+                )
+            return stored
+        except (ZoneInfoNotFoundError, Exception):
+            pass
+
+    target_tz = env_tz_clean or DEFAULT_APP_TIMEZONE
+    try:
+        ZoneInfo(target_tz)
+    except (ZoneInfoNotFoundError, Exception) as exc:
+        raise ValueError(
+            f"Invalid APP_TIMEZONE '{target_tz}'. Expected a valid IANA timezone name such as "
+            f"'Europe/London', 'America/New_York', or 'Asia/Kolkata'."
+        ) from exc
+
+    from app.models import SystemSetting
+    existing = db.query(SystemSetting).filter(SystemSetting.key == APP_TIMEZONE_SETTING_KEY).first()
+    if existing:
+        existing.value = target_tz
+    else:
+        db.add(SystemSetting(key=APP_TIMEZONE_SETTING_KEY, value=target_tz))
+    db.commit()
+    return target_tz
+
 def get_app_timezone(db: Optional[Session] = None) -> str:
     """
     Retrieves the authoritative IANA timezone configured in system_settings,
-    defaulting to 'Europe/London' if not set or if db session is unavailable.
+    falling back to APP_TIMEZONE env var or 'Europe/London' if not yet persisted.
     """
     if db is not None:
         try:
-            from app.models import SystemSetting
-            setting = db.query(SystemSetting).filter(SystemSetting.key == APP_TIMEZONE_SETTING_KEY).first()
-            if setting and setting.value and setting.value.strip():
-                clean_tz = setting.value.strip()
-                # Validate ZoneInfo accepts it
-                ZoneInfo(clean_tz)
-                return clean_tz
+            stored = get_stored_app_timezone(db)
+            if stored:
+                ZoneInfo(stored)
+                return stored
+        except Exception:
+            pass
+    env_tz = os.getenv("APP_TIMEZONE")
+    if env_tz and env_tz.strip():
+        try:
+            clean_env_tz = env_tz.strip()
+            ZoneInfo(clean_env_tz)
+            return clean_env_tz
         except Exception:
             pass
     return DEFAULT_APP_TIMEZONE

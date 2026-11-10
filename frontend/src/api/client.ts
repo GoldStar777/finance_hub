@@ -193,6 +193,81 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   }
 }
 
+export interface AuthorizedFileResult {
+  blob: Blob;
+  blobUrl: string;
+  contentType: string;
+  filename: string;
+}
+
+function resolveApiEndpointUrl(urlOrEndpoint: string): string {
+  if (urlOrEndpoint.startsWith('/api/') || urlOrEndpoint === '/api') {
+    return urlOrEndpoint;
+  }
+  return urlOrEndpoint.startsWith('/') ? `${API_BASE}${urlOrEndpoint}` : `${API_BASE}/${urlOrEndpoint}`;
+}
+
+function parseContentDispositionFilename(disposition: string | null, fallbackName: string): string {
+  if (!disposition) return fallbackName;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim());
+    } catch {
+      // fall back below
+    }
+  }
+  const basicMatch = disposition.match(/filename="([^"]+)"/i);
+  return basicMatch?.[1] || fallbackName;
+}
+
+function appendQueryParam(url: string, key: string, value: string): string {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
+async function fetchAuthorizedFile(urlOrEndpoint: string, fallbackName: string = 'attachment'): Promise<AuthorizedFileResult> {
+  const url = resolveApiEndpointUrl(urlOrEndpoint);
+  const headers: Record<string, string> = {};
+  const activeProfileId = getActiveProfileId();
+  if (activeProfileId) {
+    headers['X-Profile-ID'] = activeProfileId;
+  }
+
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let msg = `Request failed (${res.status})`;
+    try {
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const err = await res.json();
+        if (err?.detail) msg = err.detail;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(msg);
+  }
+
+  const blob = await res.blob();
+  const contentType = res.headers.get('content-type') || blob.type || 'application/octet-stream';
+  const filename = parseContentDispositionFilename(res.headers.get('Content-Disposition'), fallbackName);
+  const blobUrl = URL.createObjectURL(blob);
+  return { blob, blobUrl, contentType, filename };
+}
+
+function triggerBlobDownload(blobUrl: string, filename: string, revokeAfterMs: number = 2000): void {
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  if (revokeAfterMs >= 0) {
+    setTimeout(() => URL.revokeObjectURL(blobUrl), revokeAfterMs);
+  }
+}
+
 function buildTransactionFilterParams(filters: TransactionFilters = {}): URLSearchParams {
   const params = new URLSearchParams();
 
@@ -356,6 +431,30 @@ export const api = {
   getTransaction: (id: number) =>
     request<Transaction>(`/transactions/${id}`),
 
+  getTransactionReceiptUrl: (
+    transactionId: number,
+    leg: 'source' | 'destination' = 'source',
+    download: boolean = false
+  ): string => {
+    const base = `${API_BASE}/transactions/${transactionId}/receipt`;
+    const params = new URLSearchParams();
+    if (leg === 'destination') params.set('leg', 'destination');
+    if (download) params.set('download', 'true');
+    const qs = params.toString();
+    return qs ? `${base}?${qs}` : base;
+  },
+
+  fetchReceiptAttachment: (urlOrEndpoint: string, fallbackName: string = 'receipt') =>
+    fetchAuthorizedFile(urlOrEndpoint, fallbackName),
+
+  downloadReceiptAttachment: async (urlOrEndpoint: string, fallbackName: string = 'receipt'): Promise<void> => {
+    const downloadUrl = urlOrEndpoint.includes('download=')
+      ? urlOrEndpoint
+      : appendQueryParam(urlOrEndpoint, 'download', 'true');
+    const { blobUrl, filename } = await fetchAuthorizedFile(downloadUrl, fallbackName);
+    triggerBlobDownload(blobUrl, filename);
+  },
+
   createTransaction: (payload: TransactionCreatePayload) =>
     request<Transaction>('/transactions', {
       method: 'POST',
@@ -453,6 +552,38 @@ export const api = {
 
   getBackupDownloadUrl: (filename: string) =>
     `${API_BASE}/system/backups/${encodeURIComponent(filename)}/download`,
+
+  downloadBackupArchive: async (filename: string): Promise<void> => {
+    const url = `${API_BASE}/system/backups/${encodeURIComponent(filename)}/download`;
+    const headers: Record<string, string> = {};
+    const activeProfileId = getActiveProfileId();
+    if (activeProfileId) {
+      headers['X-Profile-ID'] = activeProfileId;
+    }
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      let msg = `Download failed (${res.status})`;
+      try {
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const err = await res.json();
+          if (err?.detail) msg = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+  },
 
   // Staging Review Queue & Statement Intake
   getStagingItems: (status: string = 'pending', sourceType?: string) => {

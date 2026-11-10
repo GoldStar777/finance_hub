@@ -37,18 +37,26 @@ Finance Hub is a local-first, single-user personal finance application powered b
 
 ## Quick Install
 
-Clone the repository and preview or run the idempotent installer:
+Clone the repository, optionally configure currency/timezone **before** starting the app for the first time, and run the idempotent installer:
 
 ```bash
 git clone <repository-url> finance_hub
 cd finance_hub
 
-# 1. Preview every check, path, and command without changing anything
+# 1. (Recommended before first launch if not using GBP / Europe/London / port 8050)
+cp .env.example .env
+# Edit .env to set BASE_CURRENCY (e.g. USD, EUR), APP_TIMEZONE (e.g. America/New_York),
+# APP_PORT, or BACKUP_DIR BEFORE first startup.
+
+# 2. Preview every check, path, and command without changing anything
 ./scripts/install.sh --dry-run
 
-# 2. Install Python dependencies (./venv), build the frontend, and register the user service
+# 3. Install Python dependencies (./venv), build the frontend, and register the user service
 ./scripts/install.sh
 ```
+
+> [!IMPORTANT]
+> Running `./scripts/install.sh` without `--no-service` starts the background service immediately, which initializes `./data/finances.db` and locks `BASE_CURRENCY` (default `GBP`). If you want a currency other than `GBP`, create and edit `.env` **before** running `./scripts/install.sh` (or install with `./scripts/install.sh --no-service` first).
 
 Useful installer options:
 - `./scripts/install.sh --no-service` — Install `./venv` and build `frontend/dist` without registering `launchd` or `systemd`.
@@ -56,6 +64,13 @@ Useful installer options:
 - `./scripts/install.sh --python /path/to/python3.12` — Select a specific Python 3.10+ interpreter.
 
 Once running, open **[http://127.0.0.1:8050](http://127.0.0.1:8050)** (or your configured `APP_PORT`). Interactive API docs are served locally at `/docs`.
+
+### First-Run Walkthrough
+1. **Empty Workspace Ready**: First startup initializes an empty `Default Profile` inside `./data/` (`finances.db` + `profiles.json`) using your chosen `BASE_CURRENCY` and `APP_TIMEZONE` (`GBP` and `Europe/London` if `.env` is unset).
+2. **Optional Additional Workspaces**: Open **Settings (⚙) → Manage Financial Workspaces** to create separate isolated workspaces (each gets its own SQLite database, receipts folder, and backups folder under `./data/profiles/<profile_id>/`).
+3. **Add Your First Account**: Click **+ Add First Account** on the dashboard to create a Current, Savings, Cash, Credit Card, or Investment account with an opening balance as of now or a past cutoff date.
+4. **Create Categories**: Open **Manage Accounts & Categories → Categories** to add separate **Expense** and **Income** categories.
+5. **Record or Import Transactions**: Use **+ Transaction** in the top bar to enter a transaction manually (`E`) or import a local receipt, screenshot, PDF, CSV, or Excel statement (`I`).
 
 ---
 
@@ -112,10 +127,10 @@ Copy [`.env.example`](.env.example) to `.env` to override defaults (`app/config.
 
 | Setting | Default | Scope | Notes |
 | :--- | :--- | :--- | :--- |
-| `APP_PORT` | `8050` | Process | Localhost port on `127.0.0.1`. |
+| `APP_PORT` | `8050` | Process | Localhost port on `127.0.0.1` (`1–65535`). |
 | `BASE_CURRENCY` | `GBP` | First DB init | 3-letter ISO 4217 code (e.g., `GBP`, `USD`, `EUR`, `CAD`, `AUD`, `CHF`, `INR`). Stored in SQLite `system_settings`; if an already-initialized database has a different stored base currency, startup intentionally fails fast rather than re-labeling existing monetary amounts. |
+| `APP_TIMEZONE` / `app_timezone` (SQLite) | `Europe/London` | First DB init / per profile | Valid IANA timezone (e.g., `Europe/London`, `America/New_York`, `Europe/Berlin`). Persisted into SQLite `system_settings` under key `app_timezone` on first initialization and used for local calendar boundaries, daily windows, and balance anchors without altering stored UTC timestamps. Already-initialized databases keep their stored `app_timezone` if `APP_TIMEZONE` changes in `.env`. |
 | `BACKUP_DIR` | `./data/backups` | Default profile | Optional custom directory for the default profile's backup ZIP archives. Non-default profiles always write backups to `./data/profiles/<id>/backups`. |
-| `app_timezone` (SQLite) | `Europe/London` | Per profile | IANA timezone stored in `system_settings` under key `app_timezone`, used for local calendar boundaries, daily windows, and balance anchors. |
 
 ### Background Service Management
 
@@ -160,10 +175,12 @@ systemctl --user stop financehub.service
 
 # Restore into the default profile (verified with SQLite PRAGMA integrity_check;
 # automatically saves a pre-restore rollback copy first)
-./venv/bin/python -m app.restore path/to/finance_hub_backup_YYYYMMDD_HHMMSS.zip
+./venv/bin/python -m app.restore data/backups/finance_hub_backup_YYYY-MM-DD_HHMMSS.zip
 
-# Or restore into a specific profile by ID or name
-./venv/bin/python -m app.restore path/to/backup.zip --profile "Shared Household"
+# Or restore into a specific non-default profile by ID or name
+./venv/bin/python -m app.restore data/profiles/<profile_id>/backups/finance_hub_backup_YYYY-MM-DD_HHMMSS.zip --profile "Shared Household"
+
+# If your service runs on a custom port outside .env, pass --port <APP_PORT> for the port-in-use guard
 ```
 
 After restore completes, restart the service (`launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.financehub.app.plist"` on macOS, `systemctl --user start financehub.service` on Linux, or `./venv/bin/python run.py`).
@@ -205,7 +222,7 @@ By default, `./scripts/uninstall.sh` removes only the registered background serv
 ./scripts/uninstall.sh --keep-deps
 ```
 
-To permanently delete `./data` (SQLite databases, profiles, receipts, and backups inside `./data`), you must pass `--purge-data` and confirm interactively (or pair with `--yes` for non-interactive automation). Any custom `BACKUP_DIR` outside `./data` is never modified or deleted automatically.
+To permanently delete `./data` (SQLite databases, profiles, receipts, and backups inside `./data`), you must pass `--purge-data` and confirm interactively (or pair with `--yes` for non-interactive automation). `--dry-run --purge-data` previews the exact databases, backup ZIPs, file count, paths, and total size that would be deleted. Any custom `BACKUP_DIR` outside `./data` and `./.env` are never deleted automatically.
 
 ```bash
 ./scripts/uninstall.sh --dry-run --purge-data   # Preview exact paths first

@@ -11,7 +11,7 @@
         </span>
       </div>
       <div class="text-3xl font-extrabold tracking-tight sensitive text-slate-900 dark:text-white mt-3 font-mono">
-        {{ summary?.formatted_net_worth || '£0.00' }}
+        {{ summary?.formatted_net_worth || zeroDisplay }}
       </div>
       <p class="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
         Liquid holdings + investments minus active debt
@@ -29,7 +29,7 @@
         </span>
       </div>
       <div class="text-3xl font-extrabold tracking-tight sensitive text-sky-800 dark:text-sky-300 mt-3 font-mono">
-        {{ summary?.formatted_total_liquid || '£0.00' }}
+        {{ summary?.formatted_total_liquid || zeroDisplay }}
       </div>
       <p class="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
         Immediate deployable capital across bank accounts
@@ -47,7 +47,7 @@
         </span>
       </div>
       <div class="text-3xl font-extrabold tracking-tight sensitive text-indigo-800 dark:text-indigo-300 mt-3 font-mono">
-        {{ summary?.formatted_total_invested || '£0.00' }}
+        {{ summary?.formatted_total_invested || zeroDisplay }}
       </div>
       <p class="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
         Securities, funds, crypto & pensions
@@ -65,7 +65,7 @@
         </span>
       </div>
       <div class="text-3xl font-extrabold tracking-tight sensitive text-rose-700 dark:text-rose-400 mt-3 font-mono">
-        {{ summary?.formatted_total_debt || '£0.00' }}
+        {{ summary?.formatted_total_debt || zeroDisplay }}
       </div>
       <p class="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
         Active credit card statement balances
@@ -75,9 +75,14 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { DashboardSummary } from '../types';
+import { useSystemStore } from '../stores/system';
 
 defineProps<{
   summary: DashboardSummary | null;
 }>();
+
+const systemStore = useSystemStore();
+const zeroDisplay = computed(() => `${systemStore.config?.base_currency_symbol || '£'}0.00`);
 </script>

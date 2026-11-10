@@ -102,7 +102,7 @@
 
             <div class="text-xs text-slate-500 dark:text-slate-400 flex flex-col justify-center space-y-1">
               <span class="font-semibold text-slate-700 dark:text-slate-300">Privacy & Local Processing</span>
-              <span>All classification and OCR occurs strictly offline on your Mac. No file contents or financial data leave your computer.</span>
+              <span>All classification and OCR occurs strictly offline on your computer. No file contents or financial data leave your machine.</span>
             </div>
           </div>
 

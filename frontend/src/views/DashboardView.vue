@@ -86,17 +86,45 @@
       </div>
 
       <!-- Empty State -->
-      <div v-else class="border border-brand-border dark:border-brand-darkborder rounded-2xl bg-white/60 dark:bg-brand-darksurface/60 p-12 text-center space-y-3">
+      <div v-else class="border border-brand-border dark:border-brand-darkborder rounded-2xl bg-white/60 dark:bg-brand-darksurface/60 p-8 sm:p-10 text-center space-y-5">
         <div class="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 mx-auto flex items-center justify-center font-bold">
           💳
         </div>
-        <p class="text-slate-900 dark:text-white font-semibold">No accounts configured yet</p>
-        <p class="text-xs text-slate-500 max-w-sm mx-auto">Add your bank current account, credit card, or savings account to start tracking balances.</p>
-        <button 
-          @click="$emit('open-manage-accounts-categories')" 
-          class="mt-2 px-4 py-2 text-xs font-semibold rounded-full bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm hover:opacity-90 transition">
-          + Add First Account
-        </button>
+        <div class="space-y-1.5">
+          <p class="text-slate-900 dark:text-white font-semibold">No accounts configured yet</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 max-w-lg mx-auto">
+            Add your bank current account, cash wallet, credit card, or investment portfolio to start tracking balances. All ledgers, receipts, and backups remain offline in <code class="font-mono">./data</code>.
+          </p>
+        </div>
+
+        <div class="max-w-xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left text-[11px]">
+          <div class="p-3 rounded-xl border border-brand-border/80 dark:border-brand-darkborder/80 bg-slate-50/70 dark:bg-slate-800/40">
+            <div class="font-bold text-slate-800 dark:text-slate-200">1. Add an Account</div>
+            <p class="text-slate-500 dark:text-slate-400 mt-0.5">Set an opening balance as of today or a past cutoff date.</p>
+          </div>
+          <div class="p-3 rounded-xl border border-brand-border/80 dark:border-brand-darkborder/80 bg-slate-50/70 dark:bg-slate-800/40">
+            <div class="font-bold text-slate-800 dark:text-slate-200">2. Add Categories</div>
+            <p class="text-slate-500 dark:text-slate-400 mt-0.5">Create separate Expense and Income categories in Manage Accounts &amp; Categories.</p>
+          </div>
+          <div class="p-3 rounded-xl border border-brand-border/80 dark:border-brand-darkborder/80 bg-slate-50/70 dark:bg-slate-800/40">
+            <div class="font-bold text-slate-800 dark:text-slate-200">3. Log or Import</div>
+            <p class="text-slate-500 dark:text-slate-400 mt-0.5">Record entries manually or upload CSV/XLSX statements and receipts via + Transaction.</p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-center gap-2">
+          <button
+            @click="$emit('open-manage-accounts-categories')"
+            class="px-4 py-2 text-xs font-semibold rounded-full bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm hover:opacity-90 transition">
+            + Add First Account
+          </button>
+        </div>
+
+        <p class="text-[11px] font-mono text-slate-400 dark:text-slate-500">
+          Base Currency: <strong class="text-slate-600 dark:text-slate-300">{{ systemStore.config?.base_currency || 'GBP' }} ({{ currencySymbol }})</strong>
+          &middot;
+          Timezone: <strong class="text-slate-600 dark:text-slate-300">{{ systemStore.config?.app_timezone || 'Europe/London' }}</strong>
+        </p>
       </div>
     </section>
 

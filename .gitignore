@@ -1,0 +1,39 @@
+# Python & Virtual Environments
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment & Local Service Files
+.env
+.env.*
+!.env.example
+*.plist
+*.service
+*.log
+
+# Private Financial Data, Databases, Backups & Receipts
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.safety_backup_*
+receipts/
+staging_receipts/
+backups/
+*.zip
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
